@@ -1,0 +1,186 @@
+substitutions:
+  name: sensornode
+  friendly_name: Sensornode
+  # Kalibrering mot PT100: sett offset = PT100 - sensor (f.eks. -1.2)
+  aht_temp_offset: "0.0"
+  aht_hum_offset: "0.0"
+  bmp_temp_offset: "0.0"
+  bmp_pressure_offset: "0.0"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+# Logger går over innebygd USB-Serial/JTAG på C3
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  # Kryptert OTA, gjenbruker api_key (anbefalt i stedet for passord)
+  - platform: esphome
+    encryption:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Strømsparing gir 300+ ms ping og timeout i Homey
+  power_save_mode: none
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+# Blå LED, aktiv lav
+status_led:
+  pin:
+    number: GPIO8
+    inverted: true
+
+# OLED (0x3C), AHT20 (0x38), BMP280 (0x76/0x77)
+i2c:
+  sda: GPIO5
+  scl: GPIO6
+  scan: true
+  frequency: 400kHz
+
+# MAX31865
+spi:
+  clk_pin: GPIO4
+  miso_pin: GPIO3
+  mosi_pin: GPIO10
+
+sensor:
+  - platform: max31865
+    name: "PT100 temperatur"
+    id: pt100
+    cs_pin: GPIO7
+    reference_resistance: 430 Ω
+    rtd_nominal_resistance: 100 Ω
+    rtd_wires: 3
+    mains_filter: 50HZ
+    update_interval: 10s
+
+  - platform: aht10
+    variant: AHT20
+    address: 0x38
+    update_interval: 30s
+    temperature:
+      name: "AHT20 temperatur"
+      id: aht_temp
+      filters:
+        - offset: ${aht_temp_offset}
+    humidity:
+      name: "AHT20 luftfuktighet"
+      id: aht_hum
+      filters:
+        - offset: ${aht_hum_offset}
+
+  - platform: bmp280_i2c
+    address: 0x77
+    update_interval: 30s
+    temperature:
+      name: "BMP280 temperatur"
+      id: bmp_temp
+      filters:
+        - offset: ${bmp_temp_offset}
+    pressure:
+      name: "BMP280 lufttrykk"
+      id: bmp_press
+      filters:
+        - offset: ${bmp_pressure_offset}
+
+  - platform: wifi_signal
+    name: "WiFi-signal"
+    id: wifi_rssi
+    update_interval: 30s
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP-adresse"
+      id: ip_addr
+
+font:
+  - file: "gfonts://Roboto Condensed"
+    id: f_small
+    size: 10
+    glyphs: " !%()+,-./:0123456789°ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+  - file:
+      type: gfonts
+      family: Roboto Condensed
+      weight: bold
+    id: f_mid
+    size: 14
+    glyphs: " %-.0123456789°ChPa"
+  - file:
+      type: gfonts
+      family: Roboto Condensed
+      weight: bold
+    id: f_big
+    size: 24
+    glyphs: " -.0123456789°"
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 72x40"
+    address: 0x3C
+    id: oled
+    update_interval: 2s
+    pages:
+      - id: page_pt100
+        lambda: |-
+          it.print(36, 0, id(f_small), TextAlign::TOP_CENTER, "PT100");
+          if (id(pt100).has_state() && !std::isnan(id(pt100).state))
+            it.printf(36, 40, id(f_big), TextAlign::BOTTOM_CENTER, "%.1f°", id(pt100).state);
+          else
+            it.print(36, 40, id(f_big), TextAlign::BOTTOM_CENTER, "--");
+      - id: page_aht
+        lambda: |-
+          it.print(36, 0, id(f_small), TextAlign::TOP_CENTER, "AHT20");
+          if (id(aht_temp).has_state() && !std::isnan(id(aht_temp).state))
+            it.printf(36, 12, id(f_mid), TextAlign::TOP_CENTER, "%.1f°C", id(aht_temp).state);
+          else
+            it.print(36, 12, id(f_mid), TextAlign::TOP_CENTER, "--");
+          if (id(aht_hum).has_state() && !std::isnan(id(aht_hum).state))
+            it.printf(36, 26, id(f_mid), TextAlign::TOP_CENTER, "%.0f %%", id(aht_hum).state);
+          else
+            it.print(36, 26, id(f_mid), TextAlign::TOP_CENTER, "--");
+      - id: page_bmp
+        lambda: |-
+          it.print(36, 0, id(f_small), TextAlign::TOP_CENTER, "BMP280");
+          if (id(bmp_press).has_state() && !std::isnan(id(bmp_press).state))
+            it.printf(36, 12, id(f_mid), TextAlign::TOP_CENTER, "%.0f hPa", id(bmp_press).state);
+          else
+            it.print(36, 12, id(f_mid), TextAlign::TOP_CENTER, "--");
+          if (id(bmp_temp).has_state() && !std::isnan(id(bmp_temp).state))
+            it.printf(36, 26, id(f_mid), TextAlign::TOP_CENTER, "%.1f°C", id(bmp_temp).state);
+          else
+            it.print(36, 26, id(f_mid), TextAlign::TOP_CENTER, "--");
+      - id: page_diag
+        lambda: |-
+          it.print(0, 0, id(f_small), "Diagnostikk");
+          if (id(ip_addr).has_state() && !id(ip_addr).state.empty())
+            it.print(0, 13, id(f_small), id(ip_addr).state.c_str());
+          else
+            it.print(0, 13, id(f_small), "IP: --");
+          if (id(wifi_rssi).has_state() && !std::isnan(id(wifi_rssi).state))
+            it.printf(0, 26, id(f_small), "WiFi %.0f dBm", id(wifi_rssi).state);
+          else
+            it.print(0, 26, id(f_small), "WiFi: --");
+
+interval:
+  - interval: 5s
+    then:
+      - display.page.show_next: oled
+      - component.update: oled
